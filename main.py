@@ -5,6 +5,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import pandas as pd
 import shutil
+from datetime import datetime, timedelta
 
 
 ITEMS_PER_PAGE = 10
@@ -254,8 +255,7 @@ class App:
                 if display_index < len(df) - 1:
                     tk.Button(frame, text="↓", command=lambda i=idx: self.move_entry(i, 1)).pack()
             else:
-                tk.Button(frame, text="查看詳細", command=lambda i=idx: self.open_detail(i)).pack()
-            # tk.Button(frame, text="查看詳細", command=lambda i=idx: self.open_detail(i)).pack()
+                tk.Button(frame, text="查看詳情", command=lambda i=idx: self.open_detail(i)).pack()
 
     def open_db_select_page(self):
         self.clear_window()
@@ -419,6 +419,9 @@ class App:
             df.at[index, 'UUID'] = str(uuid.uuid4())
         uuid_str = df.at[index, 'UUID']
 
+        self.period_data = []
+        self.period_path = os.path.join("period", f"{uuid_str}_period_1.xlsx")
+
         uuid_frame = tk.Frame(top)
         uuid_frame.pack(anchor="w", padx=10, pady=2)
         tk.Label(uuid_frame, text="UUID:").pack(side="left")
@@ -482,6 +485,34 @@ class App:
                                     df.at[index, key] = val
                             except ValueError:
                                 df.at[index, key] = val  # fallback
+            # 儲存週期表格
+            try:
+                if hasattr(self, "period_data") and self.period_data:
+                    
+                    rows = []
+                    for row_vars in self.period_data:
+                        row = [v.get() for v in row_vars]
+                        try:
+                            if row[1] and row[3]:  # 有填寫「下次間隔」與「此次執行日期」
+                                months = int(row[1])
+                                exec_date = datetime.strptime(row[3], "%Y-%m-%d")
+                                next_date = exec_date + timedelta(days=months * 30)
+                                row[4] = next_date.strftime("%Y-%m-%d")
+                            else:
+                                row[4] = ""
+                        except Exception:
+                            row[4] = ""
+                        rows.append(row)
+
+                    df_period = pd.DataFrame(rows, columns=["標題", "下次間隔__月", "執行前__月提醒", "此次執行日期", "下次執行日期"])
+                    os.makedirs(os.path.dirname(self.period_path), exist_ok=True)
+                    df_period.to_excel(self.period_path, index=False)
+            except Exception as e:
+                print("儲存週期表格失敗:", e)
+
+                df_period = pd.DataFrame(rows, columns=["標題", "下次間隔__月", "執行前__月提醒", "此次執行日期", "下次執行日期"])
+                os.makedirs(os.path.dirname(self.period_path), exist_ok=True)
+                df_period.to_excel(self.period_path, index=False)
 
             self.data_manager.templates[self.current_database] = list(dict.fromkeys(new_fields))
             self.data_manager.groups[self.current_database] = new_groups
@@ -490,6 +521,8 @@ class App:
             self.data_manager.save_data(self.current_database)
 
         def render_detail():
+            df = self.data_manager.data[self.current_database]
+
             if is_editing.get():
                 save_button.pack(side="left", padx=5)
                 edit_button.pack_forget()
@@ -499,6 +532,8 @@ class App:
 
             for widget in scrollable_frame.winfo_children():
                 widget.destroy()
+
+            row = df.loc[index]
 
             if not is_editing.get():
                 groups = self.data_manager.groups.get(self.current_database, {})
@@ -676,11 +711,9 @@ class App:
                     tk.Button(action_frame, text="💾 儲存表格", command=save_table).pack(side="left", padx=5)
                     tk.Button(action_frame, text="❌ 關閉視窗", command=close_editor).pack(side="left", padx=5)
 
-
                 def refresh_tables():
                     for widget in tables_container.winfo_children():
                         widget.destroy()
-
                     table_folder = "tables"
                     os.makedirs(table_folder, exist_ok=True)
                     for f in sorted(os.listdir("tables")):
@@ -730,6 +763,41 @@ class App:
                             tk.Button(btn_row, text="✏️ 編輯", command=lambda p=table_path, fr=frame: open_table_editor(p, fr, refresh_tables)).pack(side="left", padx=2)
                             tk.Button(btn_row, text="🗑 刪除", command=delete_table).pack(side="left", padx=2)
 
+                # 📅 週期表格顯示（只讀模式）
+                tk.Label(scrollable_frame, text="📅 週期表格", font=("Arial", 12, "bold")).pack(anchor="w", padx=10, pady=5)
+
+                period_folder = "period"
+                os.makedirs(period_folder, exist_ok=True)
+                period_files = sorted(f for f in os.listdir(period_folder) if f.startswith(f"{uuid_str}_period_") and f.endswith(".xlsx"))
+
+                for f in period_files:
+                    period_path = os.path.join(period_folder, f)
+                    try:
+                        df = pd.read_excel(period_path)
+                    except Exception as e:
+                        df = pd.DataFrame([["讀取失敗", str(e)]])
+                    
+                    if df.empty:
+                        continue
+
+                    box = tk.LabelFrame(scrollable_frame, padx=5, pady=5)
+                    box.pack(fill="x", padx=10, pady=5)
+
+                    # 📌 顯示一次欄位標題
+                    header_frame = tk.Frame(box)
+                    header_frame.pack(fill="x", pady=2)
+                    for col in df.columns:
+                        tk.Label(header_frame, text=col, width=20, anchor="center", font=("Arial", 9, "bold")).pack(side="left", padx=2)
+
+                    # 📌 顯示所有資料行
+                    for _, row_ in df.iterrows():
+                        row_frame = tk.Frame(box)
+                        row_frame.pack(fill="x", pady=1)
+                        for col in df.columns:
+                            val = str(row_.get(col, ""))
+                            tk.Label(row_frame, text=val, width=20, anchor="center").pack(side="left", padx=2)
+
+                
                 # 📑 顯示模式下顯示自由表格
                 label_frame = tk.Frame(scrollable_frame)
                 label_frame.pack(anchor="w", padx=10, pady=5)
@@ -951,11 +1019,124 @@ class App:
                           command=lambda lf=group_data["fields"],
                           cf=content_frame: add_external_link(lf, cf)).pack(side="left", padx=5)
 
+            # # 🔁 週期表格功能（僅編輯模式）
+            # tk.Label(scrollable_frame, text="🕒 週期表格", font=("Arial", 12, "bold")).pack(anchor="w", padx=10, pady=5)
+            # period_frame = tk.Frame(scrollable_frame)
+            # period_frame.pack(fill="x", padx=10, pady=5)
+
+
+            # existing_periods = [f for f in os.listdir(period_folder) if f.startswith(f"{uuid_str}_period_")]
+            # period_ids = [int(f.split("_")[-1].split(".")[0]) for f in existing_periods if f.split("_")[-1].split(".")[0].isdigit()]
+            # period_id = max(period_ids, default=0) + 1
+            # period_columns = ["標題", "下次間隔__月", "執行前__月提醒", "此次執行日期", "下次執行日期"]
             
+
+            # def add_period_row():
+            #     row_vars = [tk.StringVar() for _ in period_columns]
+            #     row_frame = tk.Frame(period_frame)
+            #     row_frame.pack(fill="x", pady=2)
+            #     for i, var in enumerate(row_vars):
+            #         if i == 3:
+            #             # 此次執行日期 - 日期選擇
+            #             def pick_date(var=var):
+            #                 import datetime
+            #                 var.set(datetime.date.today().isoformat())
+            #             tk.Entry(row_frame, textvariable=var, width=18).pack(side="left", padx=3)
+            #             tk.Button(row_frame, text="📅", command=pick_date).pack(side="left", padx=3)
+            #         elif i == 4:
+            #             # 自動計算欄位
+            #             tk.Label(row_frame, text="（自動計算）", width=20).pack(side="left", padx=3)
+            #         else:
+            #             tk.Entry(row_frame, textvariable=var, width=18).pack(side="left", padx=3)
+            #     period_data.append(row_vars)
+
+            # # 加入標題列
+            # header_frame = tk.Frame(period_frame)
+            # header_frame.pack(fill="x", pady=2)
+            # for col in period_columns:
+            #     tk.Label(header_frame, text=col, width=18, font=("Arial", 10, "bold")).pack(side="left", padx=3)
+
+            # tk.Button(period_frame, text="➕ 新增週期", command=add_period_row).pack(anchor="w", pady=5)
 
 
             tk.Button(scrollable_frame, text="新增分組", command=add_group).pack(pady=10)
             
+            ### 
+            period_folder = "period"
+            os.makedirs(period_folder, exist_ok=True)
+            period_data = self.period_data
+            period_path = self.period_path
+            tk.Label(scrollable_frame, text="⏳ 週期表格", font=("Arial", 12, "bold")).pack(anchor="w", padx=10, pady=5)
+            period_frame = tk.Frame(scrollable_frame)
+            period_frame.pack(fill="x", padx=10, pady=5)
+
+            tk.Label(period_frame, text="標題", width=20).grid(row=0, column=0)
+            tk.Label(period_frame, text="下次間隔__月", width=15).grid(row=0, column=1)
+            tk.Label(period_frame, text="執行前__月提醒", width=15).grid(row=0, column=2)
+            tk.Label(period_frame, text="此次執行日期", width=20).grid(row=0, column=3)
+            tk.Label(period_frame, text="下次執行日期", width=20).grid(row=0, column=4)
+
+            period_data = []  # local reference
+            self.period_data = period_data  # ✅ 讓 save_changes() 能存取
+
+            # 讀取既有 period 表格內容
+            if os.path.exists(period_path):
+                try:
+                    df_period = pd.read_excel(period_path)
+                    for r_idx, row in df_period.iterrows():
+                        row_vars = [tk.StringVar(value=str(row.get(col, ""))) for col in ["標題", "下次間隔__月", "執行前__月提醒", "此次執行日期", "下次執行日期"]]
+                        period_data.append(row_vars)
+                except Exception as e:
+                    print("讀取週期表格失敗：", e)
+
+            # 若無內容，自動加入一列空資料
+            if not period_data:
+                row_vars = [tk.StringVar() for _ in range(5)]
+                period_data.append(row_vars)
+
+            # 顯示每一列輸入欄位
+            def render_period_rows():
+                for widget in period_frame.winfo_children():
+                    if int(widget.grid_info()["row"]) > 0:
+                        widget.destroy()
+
+                for r_idx, row_vars in enumerate(period_data):
+                    for c_idx, var in enumerate(row_vars):
+                        tk.Entry(period_frame, textvariable=var, width=20).grid(row=r_idx+1, column=c_idx)
+                    def get_today(var=row_vars[3]):
+                        var.set(datetime.today().strftime("%Y-%m-%d"))
+                    tk.Button(period_frame, text="今天", command=get_today).grid(row=r_idx+1, column=5)
+
+                    def delete_row(idx=r_idx):
+                        period_data.pop(idx)
+                        render_period_rows()
+                    tk.Button(period_frame, text="刪除", command=delete_row).grid(row=r_idx+1, column=6)
+                    # 自動計算欄位 - Label 形式
+                    next_exec_label = tk.Label(period_frame, text="", width=20)
+                    next_exec_label.grid(row=r_idx+1, column=4)
+
+                    # 計算結果（嘗試將欄位自動更新）
+                    def update_next_exec():
+                        try:
+                            months = int(row_vars[1].get())
+                            exec_date = datetime.strptime(row_vars[3].get(), "%Y-%m-%d")
+                            next_date = exec_date + timedelta(days=months * 30)
+                            next_exec_label.config(text=next_date.strftime("%Y-%m-%d"))
+                            row_vars[4].set(next_date.strftime("%Y-%m-%d"))  # 同步更新值
+                        except:
+                            next_exec_label.config(text="")
+
+                    # 綁定內容變動時自動更新
+                    row_vars[1].trace_add("write", lambda *args: update_next_exec())
+                    row_vars[3].trace_add("write", lambda *args: update_next_exec())
+
+                    # 初始更新
+                    update_next_exec()
+
+            render_period_rows()
+
+            tk.Button(scrollable_frame, text="➕ 新增週期紀錄", command=lambda: (period_data.append([tk.StringVar() for _ in range(5)]), render_period_rows())).pack(padx=10, pady=5, anchor="w")
+
         def on_close():
             self.refresh_grid() # ← 在視窗關閉時刷新主頁內容
             top.destroy()
