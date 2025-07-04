@@ -20,5 +20,12 @@ python main.py
 ```
 ## Usage
 Directories should be created as:   
-`├─data`    # where Excel files are saved   
-`└─links` # where external copies of the data files are saved, to stabilize against path changes   
+`├─data`   # where Excel files are saved   
+`├─links`  # where external copies of the data files are saved, to stabilize against path changes   
+`├─period`  # where "period tables" are saved by each data  
+`└─tables`  # where tables are saved by *each table*
+
+The detail page should look like the following figure:  
+   
+   
+![Fig1](figs/Snipaste_2025-07-04_21-49-00.png)
