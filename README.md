@@ -8,7 +8,7 @@ Its original purpose is to support the following operations for car（車輛）a
 
 Although originally designed for this specific use case, the tool is built to be relatively general-purpose,  
 and I hope others may find it useful as well.  
-The interface and documentation are primarily written in Traditional Chinese — hope that's not a problem! 
+The interface and documentation are primarily written in Traditional Chinese(and some hard code) — hope that's not a problem! 
 ## Installation
 ```
 pip install pandas
