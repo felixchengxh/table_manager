@@ -102,6 +102,7 @@ class App:
         canvas_frame.pack(fill="both", expand=True, padx=20, pady=10)
 
         canvas = tk.Canvas(canvas_frame)
+        canvas.bind("<MouseWheel>", lambda event: canvas.yview_scroll(int(-1 * (event.delta / 120)), "units"))
         scrollbar = tk.Scrollbar(canvas_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = tk.Frame(canvas)
 
@@ -239,15 +240,18 @@ class App:
         for display_index, idx in enumerate(df.index[start:end]):
             
             row = df.loc[idx]
-            frame = tk.Frame(self.grid_frame, bd=1, relief="solid", width=250, height=130)
+            uuid_str = str(row.get("UUID", ""))
+            highlight = self.should_highlight(uuid_str)
+            frame = tk.Frame(self.grid_frame, bd=1, relief="solid", width=250, height=130,
+                     bg="#ffffcc" if highlight else None)  # 黃色背景
             frame.pack_propagate(False)
             frame.grid(row=display_index // 2, column=display_index % 2, padx=5, pady=10)
             label_fields = self.summary_fields.get(self.current_database)
             if not label_fields:
-                label_fields = df.columns[:2]
+                label_fields = [col for col in df.columns if col != "UUID"][:2]
             summary_lines = [f"{col}: {row.get(col, '')}" for col in label_fields]
             label_text = f"{self.current_database} #{idx + 1}\n" + "\n".join(summary_lines)
-            tk.Label(frame, text=label_text, justify="left").pack()
+            tk.Label(frame, text=label_text, justify="left", bg="#ffffcc" if highlight else None).pack()
             if self.data_edit_mode.get():
                 tk.Button(frame, text="🗑 刪除", command=lambda i=idx: self.delete_entry(i)).pack()
                 if display_index > 0:
@@ -397,6 +401,29 @@ class App:
     def export_page_placeholder(self):
         messagebox.showinfo("尚未實作", "匯出頁面尚未完成，之後會加入欄位選擇與儲存功能。")
 
+    def should_highlight(self, uuid_str):
+        period_path = f"period/{uuid_str}_period_1.xlsx"
+        if not os.path.exists(period_path):
+            return False
+        try:
+            df = pd.read_excel(period_path)
+            today = datetime.today()
+            for _, row in df.iterrows():
+                next_exec_str = str(row.get("下次執行日期", ""))
+                remind_months = str(row.get("執行前__月提醒", ""))
+                if not next_exec_str or not remind_months:
+                    continue
+                try:
+                    next_date = datetime.strptime(next_exec_str, "%Y-%m-%d")
+                    remind_delta = timedelta(days=int(remind_months) * 30)
+                    if today >= next_date - remind_delta:
+                        return True
+                except:
+                    continue
+        except:
+            return False
+        return False
+
     def open_detail(self, index):
         
         if hasattr(self, 'current_detail_window') and self.current_detail_window.winfo_exists():
@@ -478,13 +505,13 @@ class App:
                             col_dtype = df[key].dtype if key in df.columns else object
                             try:
                                 if pd.api.types.is_numeric_dtype(col_dtype):
-                                    df.at[index, key] = float(val) if val else None
+                                    df.at[index, key] = str(val) if val else None
                                 elif pd.api.types.is_bool_dtype(col_dtype):
                                     df.at[index, key] = val.lower() in ["true", "1", "yes"]
                                 else:
-                                    df.at[index, key] = val
+                                    df.at[index, key] = str(val)
                             except ValueError:
-                                df.at[index, key] = val  # fallback
+                                df.at[index, key] = str(val)  # fallback
             # 儲存週期表格
             try:
                 if hasattr(self, "period_data") and self.period_data:
@@ -514,6 +541,38 @@ class App:
                 os.makedirs(os.path.dirname(self.period_path), exist_ok=True)
                 df_period.to_excel(self.period_path, index=False)
 
+            # 📝 儲存異動紀錄
+            try:
+                changes_path = os.path.join("data", f"changes_{self.current_database}.xlsx")
+                os.makedirs("data", exist_ok=True)
+
+                # 載入或初始化
+                if os.path.exists(changes_path):
+                    df_changes = pd.read_excel(changes_path)
+                else:
+                    df_changes = pd.DataFrame(columns=["標題", "異動日期", "異動前", "異動後", "uuid"])
+
+                # 使用者輸入
+                title = self.change_title_var.get().strip()
+                after = self.change_after_var.get().strip()
+                if title and after:
+                    prev_rows = df_changes[df_changes["uuid"] == uuid_str]
+                    prev_after = prev_rows["異動後"].iloc[-1] if not prev_rows.empty else "無"
+                    now = datetime.today().strftime("%Y-%m-%d")
+
+                    new_row = {
+                        "標題": title,
+                        "異動日期": now,
+                        "異動前": prev_after,
+                        "異動後": after,
+                        "uuid": uuid_str
+                    }
+                    df_changes.loc[len(df_changes)] = new_row
+                    df_changes.to_excel(changes_path, index=False)
+            except Exception as e:
+                print("異動紀錄儲存失敗：", e)
+                        
+
             self.data_manager.templates[self.current_database] = list(dict.fromkeys(new_fields))
             self.data_manager.groups[self.current_database] = new_groups
             self.data_manager.save_templates(self.current_database)
@@ -540,10 +599,26 @@ class App:
                 for group_name, fields in groups.items():
                     group_frame = tk.LabelFrame(scrollable_frame, text=group_name, padx=5, pady=5)
                     group_frame.pack(fill="x", padx=10, pady=5)
+
+                    # 建立容器放置欄位內容，預設展開
+                    content_frame = tk.Frame(group_frame)
+                    content_frame.pack(fill="x")
+
+                    def make_toggle_callback(cf=content_frame):
+                        def toggle():
+                            if cf.winfo_ismapped():
+                                cf.pack_forget()
+                            else:
+                                cf.pack(fill="x")
+                        return toggle
+
+                    tk.Button(group_frame, text="展開 / 收起", command=make_toggle_callback()).pack(anchor="e")
+
+                    # 欄位內容區域
                     for field in fields:
                         if not field:
                             continue
-                        row_frame = tk.Frame(group_frame)
+                        row_frame = tk.Frame(content_frame)
                         row_frame.pack(fill="x", pady=2)
                         tk.Label(row_frame, text=field, width=20, anchor="w").pack(side="left")
                         val = row.get(field, "")
@@ -551,7 +626,6 @@ class App:
                             val_obj = json.loads(val)
                             if isinstance(val_obj, dict):
                                 if "label" in val_obj and "path" in val_obj:
-                                    # 🔗 外部連結
                                     def open_file(path=val_obj["path"]):
                                         import os, platform, subprocess
                                         if platform.system() == "Windows":
@@ -562,7 +636,6 @@ class App:
                                             subprocess.call(["xdg-open", path])
                                     tk.Button(row_frame, text=val_obj["label"], fg="blue", cursor="hand2", command=open_file).pack(side="left", padx=5)
                                 elif "label" in val_obj and "uuid" in val_obj:
-                                    # 🔁 內部連結
                                     def open_internal(uuid=val_obj["uuid"]):
                                         target_df = self.data_manager.data[self.current_database]
                                         if "UUID" not in target_df.columns:
@@ -582,7 +655,6 @@ class App:
                         except Exception:
                             tk.Label(row_frame, text=str(val), anchor="w", width=40).pack(side="left", padx=5)
                         
-                    # 📑 顯示模式下顯示自由表格
                 
                 def create_new_table(callback=None):
                     table_folder = "tables"
@@ -797,6 +869,38 @@ class App:
                             val = str(row_.get(col, ""))
                             tk.Label(row_frame, text=val, width=20, anchor="center").pack(side="left", padx=2)
 
+                # 📝 異動紀錄顯示（只讀模式）
+                tk.Label(scrollable_frame, text="📝 異動紀錄", font=("Arial", 12, "bold")).pack(anchor="w", padx=10, pady=5)
+
+                changes_path = os.path.join("data", f"changes_{self.current_database}.xlsx")
+                if os.path.exists(changes_path):
+                    try:
+                        df_changes = pd.read_excel(changes_path)
+                        df_changes = df_changes[df_changes["uuid"] == uuid_str]
+                    except Exception as e:
+                        df_changes = pd.DataFrame([{"標題": "讀取失敗", "異動日期": str(e), "異動前": "", "異動後": ""}])
+                else:
+                    df_changes = pd.DataFrame()
+
+                if not df_changes.empty:
+                    frame = tk.Frame(scrollable_frame)
+                    frame.pack(fill="x", padx=10, pady=5)
+
+                    # 顯示欄位標題列
+                    header = tk.Frame(frame)
+                    header.pack(fill="x", pady=2)
+                    for col in ["標題", "異動日期", "異動前", "異動後"]:
+                        tk.Label(header, text=col, width=20, anchor="center", font=("Arial", 9, "bold")).pack(side="left", padx=2)
+
+                    # 顯示每一筆紀錄
+                    for _, row in df_changes.iterrows():
+                        row_frame = tk.Frame(frame)
+                        row_frame.pack(fill="x", pady=1)
+                        for col in ["標題", "異動日期", "異動前", "異動後"]:
+                            val = str(row.get(col, ""))
+                            tk.Label(row_frame, text=val, width=20, anchor="center").pack(side="left", padx=2)
+                else:
+                    tk.Label(scrollable_frame, text="尚無異動紀錄", fg="gray").pack(anchor="w", padx=15, pady=5)
                 
                 # 📑 顯示模式下顯示自由表格
                 label_frame = tk.Frame(scrollable_frame)
@@ -1019,47 +1123,28 @@ class App:
                           command=lambda lf=group_data["fields"],
                           cf=content_frame: add_external_link(lf, cf)).pack(side="left", padx=5)
 
-            # # 🔁 週期表格功能（僅編輯模式）
-            # tk.Label(scrollable_frame, text="🕒 週期表格", font=("Arial", 12, "bold")).pack(anchor="w", padx=10, pady=5)
-            # period_frame = tk.Frame(scrollable_frame)
-            # period_frame.pack(fill="x", padx=10, pady=5)
-
-
-            # existing_periods = [f for f in os.listdir(period_folder) if f.startswith(f"{uuid_str}_period_")]
-            # period_ids = [int(f.split("_")[-1].split(".")[0]) for f in existing_periods if f.split("_")[-1].split(".")[0].isdigit()]
-            # period_id = max(period_ids, default=0) + 1
-            # period_columns = ["標題", "下次間隔__月", "執行前__月提醒", "此次執行日期", "下次執行日期"]
-            
-
-            # def add_period_row():
-            #     row_vars = [tk.StringVar() for _ in period_columns]
-            #     row_frame = tk.Frame(period_frame)
-            #     row_frame.pack(fill="x", pady=2)
-            #     for i, var in enumerate(row_vars):
-            #         if i == 3:
-            #             # 此次執行日期 - 日期選擇
-            #             def pick_date(var=var):
-            #                 import datetime
-            #                 var.set(datetime.date.today().isoformat())
-            #             tk.Entry(row_frame, textvariable=var, width=18).pack(side="left", padx=3)
-            #             tk.Button(row_frame, text="📅", command=pick_date).pack(side="left", padx=3)
-            #         elif i == 4:
-            #             # 自動計算欄位
-            #             tk.Label(row_frame, text="（自動計算）", width=20).pack(side="left", padx=3)
-            #         else:
-            #             tk.Entry(row_frame, textvariable=var, width=18).pack(side="left", padx=3)
-            #     period_data.append(row_vars)
-
-            # # 加入標題列
-            # header_frame = tk.Frame(period_frame)
-            # header_frame.pack(fill="x", pady=2)
-            # for col in period_columns:
-            #     tk.Label(header_frame, text=col, width=18, font=("Arial", 10, "bold")).pack(side="left", padx=3)
-
-            # tk.Button(period_frame, text="➕ 新增週期", command=add_period_row).pack(anchor="w", pady=5)
-
-
             tk.Button(scrollable_frame, text="新增分組", command=add_group).pack(pady=10)
+
+            # 📝 異動紀錄編輯區
+            tk.Label(scrollable_frame, text="📝 新增異動紀錄", font=("Arial", 12, "bold")).pack(anchor="w", padx=10, pady=5)
+
+            change_title_var = tk.StringVar()
+            change_after_var = tk.StringVar()
+
+            form_frame = tk.Frame(scrollable_frame)
+            form_frame.pack(fill="x", padx=15, pady=5)
+
+            tk.Label(form_frame, text="異動標題：", width=10, anchor="e").pack(side="left", padx=2)
+            tk.Entry(form_frame, textvariable=change_title_var, width=25).pack(side="left", padx=5)
+
+            tk.Label(form_frame, text="異動後內容：", width=12, anchor="e").pack(side="left", padx=2)
+            tk.Entry(form_frame, textvariable=change_after_var, width=40).pack(side="left", padx=5)
+
+            # 傳遞到 save_changes 時使用
+            self.change_title_var = change_title_var
+            self.change_after_var = change_after_var
+
+            
             
             ### 
             period_folder = "period"
@@ -1138,13 +1223,13 @@ class App:
             tk.Button(scrollable_frame, text="➕ 新增週期紀錄", command=lambda: (period_data.append([tk.StringVar() for _ in range(5)]), render_period_rows())).pack(padx=10, pady=5, anchor="w")
 
         def on_close():
-            self.refresh_grid() # ← 在視窗關閉時刷新主頁內容
-            top.destroy()
             if is_editing.get():
                 if messagebox.askyesno("尚未儲存", "尚未儲存變更，確定要關閉嗎？"):
                     top.destroy()
+                    self.refresh_grid()
             else:
                 top.destroy()
+                self.refresh_grid()
         
 
         def toggle_edit():
