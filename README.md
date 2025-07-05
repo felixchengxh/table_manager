@@ -13,10 +13,16 @@ The interface and documentation are primarily written in Traditional Chinese(and
 ```
 pip install pandas
 pip install openpyxl
+pip install pyinstaller # if you want to pack .py file as .exe
 ```
 ## Get started
+Simply run:
 ```
 python main.py
+```
+Pack files into .exe:
+```
+pyinstaller --noconfirm --noconsole --add-data "data;data" --add-data "links;links" --add-data "period;period" --add-data "tables;tables" table_manager.py
 ```
 ## Usage
 Directories should be created as:   
